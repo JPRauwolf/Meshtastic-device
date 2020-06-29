@@ -86,38 +86,40 @@ void UBloxGPS::doTask()
     // If we don't have a fix (a quick check), don't try waiting for a solution)
     // Hmmm my fix type reading returns zeros for fix, which doesn't seem correct, because it is still sptting out positions
     // turn off for now
-    // fixtype = ublox.getFixType();
-    // DEBUG_MSG("fix type %d\n", fixtype);
+    fixtype = ublox.getFixType(0);
+    DEBUG_MSG("GPS fix type %d\n", fixtype);
 
     // DEBUG_MSG("sec %d\n", ublox.getSecond());
     // DEBUG_MSG("lat %d\n", ublox.getLatitude());
 
     // any fix that has time
-    if (ublox.getT()) {
+    if (ublox.getT(0)) {
         /* Convert to unix time
 The Unix epoch (or Unix time or POSIX time or Unix timestamp) is the number of seconds that have elapsed since January 1, 1970
 (midnight UTC/GMT), not counting leap seconds (in ISO 8601: 1970-01-01T00:00:00Z).
 */
         struct tm t;
-        t.tm_sec = ublox.getSecond();
-        t.tm_min = ublox.getMinute();
-        t.tm_hour = ublox.getHour();
-        t.tm_mday = ublox.getDay();
-        t.tm_mon = ublox.getMonth() - 1;
-        t.tm_year = ublox.getYear() - 1900;
+        t.tm_sec = ublox.getSecond(0);
+        t.tm_min = ublox.getMinute(0);
+        t.tm_hour = ublox.getHour(0);
+        t.tm_mday = ublox.getDay(0);
+        t.tm_mon = ublox.getMonth(0) - 1;
+        t.tm_year = ublox.getYear(0) - 1900;
         t.tm_isdst = false;
         perhapsSetRTC(t);
     }
 
-    if ((fixtype >= 3 && fixtype <= 4) && ublox.getP()) // rd fixes only
+    if ((fixtype >= 3 && fixtype <= 4) && ublox.getP(0)) // rd fixes only
     {
         // we only notify if position has changed
-        latitude = ublox.getLatitude();
-        longitude = ublox.getLongitude();
-        altitude = ublox.getAltitude() / 1000; // in mm convert to meters
-        DEBUG_MSG("new gps pos lat=%f, lon=%f, alt=%d\n", latitude * 1e-7, longitude * 1e-7, altitude);
+        latitude = ublox.getLatitude(0);
+        longitude = ublox.getLongitude(0);
+        altitude = ublox.getAltitude(0) / 1000; // in mm convert to meters
+        dop = ublox.getPDOP(0); // PDOP (an accuracy metric) is reported in 10^2 units so we have to scale down when we use it
 
-        hasValidLocation = (latitude != 0) || (longitude != 0); // bogus lat lon is reported as 0,0
+        // bogus lat lon is reported as 0 or 0 (can be bogus just for one)
+        // Also: apparently when the GPS is initially reporting lock it can output a bogus latitude > 90 deg!
+        hasValidLocation = (latitude != 0) && (longitude != 0) && (latitude <= 900000000 && latitude >= -900000000);
         if (hasValidLocation) {
             wantNewLocation = false;
             notifyObservers(NULL);
@@ -125,6 +127,10 @@ The Unix epoch (or Unix time or POSIX time or Unix timestamp) is the number of s
         }
     } else // we didn't get a location update, go back to sleep and hope the characters show up
         wantNewLocation = true;
+
+    // Notify any status instances that are observing us
+    const meshtastic::GPSStatus status = meshtastic::GPSStatus(hasLock(), isConnected, latitude, longitude, altitude, dop);
+    newStatus.notifyObservers(&status);
 
     // Once we have sent a location once we only poll the GPS rarely, otherwise check back every 1s until we have something over
     // the serial

@@ -30,8 +30,6 @@ class TotalSizeCharacteristic : public CallbackCharacteristic
 
     void onWrite(BLECharacteristic *c)
     {
-        BLEKeepAliveCallbacks::onWrite(c);
-
         LockGuard g(updateLock);
         // Check if there is enough to OTA Update
         uint32_t len = getValue32(c, 0);
@@ -67,8 +65,6 @@ class DataCharacteristic : public CallbackCharacteristic
 
     void onWrite(BLECharacteristic *c)
     {
-        BLEKeepAliveCallbacks::onWrite(c);
-
         LockGuard g(updateLock);
         std::string value = c->getValue();
         uint32_t len = value.length();
@@ -80,6 +76,7 @@ class DataCharacteristic : public CallbackCharacteristic
         crc.update(data, len);
         Update.write(data, len);
         updateActualSize += len;
+        powerFSM.trigger(EVENT_RECEIVED_TEXT_MSG); // Not exactly correct, but we want to force the device to not sleep now
     }
 };
 
@@ -92,8 +89,6 @@ class CRC32Characteristic : public CallbackCharacteristic
 
     void onWrite(BLECharacteristic *c)
     {
-        BLEKeepAliveCallbacks::onWrite(c);
-
         LockGuard g(updateLock);
         uint32_t expectedCRC = getValue32(c, 0);
         uint32_t actualCRC = crc.finalize();
@@ -129,8 +124,10 @@ class CRC32Characteristic : public CallbackCharacteristic
 
 void bluetoothRebootCheck()
 {
-    if (rebootAtMsec && millis() > rebootAtMsec)
+    if (rebootAtMsec && millis() > rebootAtMsec) {
+        DEBUG_MSG("Rebooting for update\n");
         ESP.restart();
+    }
 }
 
 /*

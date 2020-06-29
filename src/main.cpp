@@ -33,21 +33,37 @@
 #include "power.h"
 // #include "rom/rtc.h"
 #include "DSRRouter.h"
+#include "debug.h"
 #include "main.h"
 #include "screen.h"
 #include "sleep.h"
 #include <Wire.h>
+#include <OneButton.h>
 // #include <driver/rtc_io.h>
 
 #ifndef NO_ESP32
 #include "BluetoothUtil.h"
+#include "WiFi.h"
+#endif
+
+#include "RF95Interface.h"
+#include "SX1262Interface.h"
+
+#ifdef NRF52_SERIES
+#include "variant.h"
 #endif
 
 // We always create a screen object, but we only init it if we find the hardware
 meshtastic::Screen screen(SSD1306_ADDRESS);
 
-// Global power status singleton
-meshtastic::PowerStatus powerStatus;
+// Global power status
+meshtastic::PowerStatus *powerStatus = new meshtastic::PowerStatus();
+
+// Global GPS status
+meshtastic::GPSStatus *gpsStatus = new meshtastic::GPSStatus();
+
+// Global Node status
+meshtastic::NodeStatus *nodeStatus = new meshtastic::NodeStatus();
 
 bool ssd1306_found;
 bool axp192_found;
@@ -111,16 +127,46 @@ static uint32_t ledBlinker()
     setLed(ledOn);
 
     // have a very sparse duty cycle of LED being on, unless charging, then blink 0.5Hz square wave rate to indicate that
-    return powerStatus.charging ? 1000 : (ledOn ? 2 : 1000);
+    return powerStatus->getIsCharging() ? 1000 : (ledOn ? 2 : 1000);
 }
 
 Periodic ledPeriodic(ledBlinker);
 
-#include "RF95Interface.h"
-#include "SX1262Interface.h"
+// Prepare for button presses
+#ifdef BUTTON_PIN
+    OneButton userButton;
+#endif
+#ifdef BUTTON_PIN_ALT
+    OneButton userButtonAlt;
+#endif
+void userButtonPressed() {
+    powerFSM.trigger(EVENT_PRESS);
+}
+void userButtonPressedLong(){
+    screen.adjustBrightness();
+}
 
-#ifdef NO_ESP32
-#include "variant.h"
+#ifndef NO_ESP32
+void initWifi()
+{
+    strcpy(radioConfig.preferences.wifi_ssid, "geeksville");
+    strcpy(radioConfig.preferences.wifi_password, "xxx");
+    if (radioConfig.has_preferences) {
+        const char *wifiName = radioConfig.preferences.wifi_ssid;
+
+        if (*wifiName) {
+            const char *wifiPsw = radioConfig.preferences.wifi_password;
+            if (radioConfig.preferences.wifi_ap_mode) {
+                // DEBUG_MSG("STARTING WIFI AP: ssid=%s, ok=%d\n", wifiName, WiFi.softAP(wifiName, wifiPsw));
+            } else {
+                // WiFi.mode(WIFI_MODE_STA);
+                DEBUG_MSG("JOINING WIFI: ssid=%s\n", wifiName);
+                // WiFi.begin(wifiName, wifiPsw);
+            }
+        }
+    } else
+        DEBUG_MSG("Not using WIFI\n");
+}
 #endif
 
 void setup()
@@ -151,12 +197,21 @@ void setup()
 #else
     Wire.begin();
 #endif
+    // i2c still busted on new board
+#ifndef ARDUINO_NRF52840_PPR
     scanI2Cdevice();
+#endif
 
     // Buttons & LED
 #ifdef BUTTON_PIN
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
-    digitalWrite(BUTTON_PIN, 1);
+    userButton = OneButton(BUTTON_PIN, true, true);
+    userButton.attachClick(userButtonPressed);
+    userButton.attachDuringLongPress(userButtonPressedLong);
+#endif
+#ifdef BUTTON_PIN_ALT
+    userButtonAlt = OneButton(BUTTON_PIN_ALT, true, true);
+    userButtonAlt.attachClick(userButtonPressed);
+    userButton.attachDuringLongPress(userButtonPressedLong);
 #endif
 #ifdef LED_PIN
     pinMode(LED_PIN, OUTPUT);
@@ -174,6 +229,10 @@ void setup()
         ssd1306_found = false; // forget we even have the hardware
 
     esp32Setup();
+    power = new Power();
+    power->setup();
+    power->setStatusHandler(powerStatus);
+    powerStatus->observe(&power->newStatus);
 #endif
 
 #ifdef NRF52_SERIES
@@ -204,8 +263,14 @@ void setup()
     gps = new NEMAGPS();
     gps->setup();
 #endif
+    gpsStatus->observe(&gps->newStatus);
+    nodeStatus->observe(&nodeDB.newStatus);
 
     service.init();
+#ifndef NO_ESP32
+    // Must be after we init the service, because the wifi settings are loaded by NodeDB (oops)
+    initWifi();
+#endif
 
 #ifdef SX1262_ANT_SW
     // make analog PA vs not PA switch on SX1262 eval board work properly
@@ -233,13 +298,14 @@ void setup()
         new SimRadio();
 #endif
 
-    if (!rIf->init())
+    if (!rIf || !rIf->init())
         recordCriticalError(ErrNoRadio);
     else
         router.addInterface(rIf);
 
     // This must be _after_ service.init because we need our preferences loaded from flash to have proper timeout values
     PowerFSM_setup(); // we will transition to ON in a couple of seconds, FIXME, only do this for cold boots, not waking from SDS
+
 
     // setBluetoothEnable(false); we now don't start bluetooth until we enter the proper state
     setCPUFast(false); // 80MHz is fine for our slow peripherals
@@ -282,29 +348,18 @@ void loop()
     DEBUG_PORT.loop(); // Send/receive protobufs over the serial port
 #endif
 
+    // heap_caps_check_integrity_all(true); // FIXME - disable this expensive check
+
 #ifndef NO_ESP32
     esp32Loop();
+    power->loop();
 #endif
 
 #ifdef BUTTON_PIN
-    // if user presses button for more than 3 secs, discard our network prefs and reboot (FIXME, use a debounce lib instead of
-    // this boilerplate)
-    static bool wasPressed = false;
-
-    if (!digitalRead(BUTTON_PIN)) {
-        if (!wasPressed) { // just started a new press
-            DEBUG_MSG("pressing\n");
-
-            // doLightSleep();
-            // esp_pm_dump_locks(stdout); // FIXME, do this someplace better
-            wasPressed = true;
-
-            powerFSM.trigger(EVENT_PRESS);
-        }
-    } else if (wasPressed) {
-        // we just did a release
-        wasPressed = false;
-    }
+    userButton.tick();
+#endif
+#ifdef BUTTON_PIN_ALT
+    userButtonAlt.tick();
 #endif
 
     // Show boot screen for first 3 seconds, then switch to normal operation.
@@ -314,12 +369,17 @@ void loop()
         showingBootScreen = false;
     }
 
+#ifdef DEBUG_STACK
+    static uint32_t lastPrint = 0;
+    if (millis() - lastPrint > 10 * 1000L) {
+        lastPrint = millis();
+        meshtastic::printThreadInfo("main");
+    }
+#endif
+
     // Update the screen last, after we've figured out what to show.
-    screen.debug()->setNodeNumbersStatus(nodeDB.getNumOnlineNodes(), nodeDB.getNumNodes());
     screen.debug()->setChannelNameStatus(channelSettings.name);
-    screen.debug()->setPowerStatus(powerStatus);
-    // TODO(#4): use something based on hdop to show GPS "signal" strength.
-    screen.debug()->setGPSStatus(gps->hasLock() ? "good" : "bad");
+    //screen.debug()->setPowerStatus(powerStatus);
 
     // No GPS lock yet, let the OS put the main CPU in low power mode for 100ms (or until another interrupt comes in)
     // i.e. don't just keep spinning in loop as fast as we can.

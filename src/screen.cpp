@@ -31,13 +31,18 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "main.h"
 #include "mesh-pb-constants.h"
 #include "screen.h"
+#include "utils.h"
 
 #define FONT_HEIGHT 14 // actually 13 for "ariel 10" but want a little extra space
 #define FONT_HEIGHT_16 (ArialMT_Plain_16[1] + 1)
+#ifdef USE_SH1106
+#define SCREEN_WIDTH 132
+#else
 #define SCREEN_WIDTH 128
+#endif
 #define SCREEN_HEIGHT 64
 #define TRANSITION_FRAMERATE 30 // fps
-#define IDLE_FRAMERATE 10       // in fps
+#define IDLE_FRAMERATE 1        // in fps
 #define COMPASS_DIAM 44
 
 #define NUM_EXTRA_FRAMES 2 // text message and debug frame
@@ -50,6 +55,9 @@ static FrameCallback normalFrames[MAX_NUM_NODES + NUM_EXTRA_FRAMES];
 static uint32_t targetFramerate = IDLE_FRAMERATE;
 static char btPIN[16] = "888888";
 
+uint8_t imgBattery[16] = { 0xFF, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xE7, 0x3C };
+static bool heartbeat = false;
+
 static void drawBootScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     // draw an xbm image.
@@ -60,20 +68,34 @@ static void drawBootScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     display->setFont(ArialMT_Plain_16);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->drawString(64 + x, SCREEN_HEIGHT - FONT_HEIGHT_16, "meshtastic.org");
+    display->setFont(ArialMT_Plain_10);
+    const char *region = xstr(HW_VERSION);
+    if (*region && region[3] == '-') // Skip past 1.0- in the 1.0-EU865 string
+        region += 4;
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%s",
+             xstr(APP_VERSION)); // Note: we don't bother printing region or now, it makes the string too long
+    display->drawString(SCREEN_WIDTH - 20, 0, buf);
 }
 
 static void drawFrameBluetooth(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(ArialMT_Plain_16);
-    display->drawString(64 + x, 2 + y, "Bluetooth");
+    display->drawString(64 + x, y, "Bluetooth");
 
     display->setFont(ArialMT_Plain_10);
-    display->drawString(64 + x, SCREEN_HEIGHT - FONT_HEIGHT + y, "Enter this code");
+    display->drawString(64 + x, FONT_HEIGHT + y + 2, "Enter this code");
 
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(ArialMT_Plain_24);
-    display->drawString(64 + x, 22 + y, btPIN);
+    display->drawString(64 + x, 26 + y, btPIN);
+
+    display->setFont(ArialMT_Plain_10);
+    char buf[30];
+    const char *name = "Name: ";
+    strcpy(buf, name);
+    strcat(buf, getDeviceName());
+    display->drawString(64 + x, 48 + y, buf);
 }
 
 /// Draw the last text message we received
@@ -122,34 +144,105 @@ static void drawColumns(OLEDDisplay *display, int16_t x, int16_t y, const char *
     }
 }
 
-/// Draw a series of fields in a row, wrapping to multiple rows if needed
-/// @return the max y we ended up printing to
-static uint32_t drawRows(OLEDDisplay *display, int16_t x, int16_t y, const char **fields)
-{
-    // The coordinates define the left starting point of the text
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
+#if 0
+    /// Draw a series of fields in a row, wrapping to multiple rows if needed
+    /// @return the max y we ended up printing to
+    static uint32_t drawRows(OLEDDisplay *display, int16_t x, int16_t y, const char **fields)
+    {
+        // The coordinates define the left starting point of the text
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
 
-    const char **f = fields;
-    int xo = x, yo = y;
-    const int COLUMNS = 2; // hardwired for two columns per row....
-    int col = 0;           // track which column we are on
-    while (*f) {
-        display->drawString(xo, yo, *f);
-        xo += SCREEN_WIDTH / COLUMNS;
-        // Wrap to next row, if needed.
-        if (++col >= COLUMNS) {
-            xo = x;
-            yo += FONT_HEIGHT;
-            col = 0;
+        const char **f = fields;
+        int xo = x, yo = y;
+        const int COLUMNS = 2; // hardwired for two columns per row....
+        int col = 0;           // track which column we are on
+        while (*f) {
+            display->drawString(xo, yo, *f);
+            xo += SCREEN_WIDTH / COLUMNS;
+            // Wrap to next row, if needed.
+            if (++col >= COLUMNS) {
+                xo = x;
+                yo += FONT_HEIGHT;
+                col = 0;
+            }
+            f++;
         }
-        f++;
-    }
-    if (col != 0) {
-        // Include last incomplete line in our total.
-        yo += FONT_HEIGHT;
-    }
+        if (col != 0) {
+            // Include last incomplete line in our total.
+            yo += FONT_HEIGHT;
+        }
 
-    return yo;
+        return yo;
+    }
+#endif
+
+// Draw power bars or a charging indicator on an image of a battery, determined by battery charge voltage or percentage.
+static void drawBattery(OLEDDisplay *display, int16_t x, int16_t y, uint8_t *imgBuffer, const PowerStatus *powerStatus) 
+{
+    static const uint8_t powerBar[3] = { 0x81, 0xBD, 0xBD };
+    static const uint8_t lightning[8] = { 0xA1, 0xA1, 0xA5, 0xAD, 0xB5, 0xA5, 0x85, 0x85 };
+    // Clear the bar area on the battery image
+    for (int i = 1; i < 14; i++) {
+        imgBuffer[i] = 0x81;
+    }
+    // If charging, draw a charging indicator
+    if (powerStatus->getIsCharging()) {
+        memcpy(imgBuffer + 3, lightning, 8);
+        // If not charging, Draw power bars
+    } else {
+        for (int i = 0; i < 4; i++) {
+            if(powerStatus->getBatteryChargePercent() >= 25 * i) 
+                memcpy(imgBuffer + 1 + (i * 3), powerBar, 3);
+        }
+    }
+    display->drawFastImage(x, y, 16, 8, imgBuffer);
+}
+
+// Draw nodes status
+static void drawNodes(OLEDDisplay *display, int16_t x, int16_t y, NodeStatus *nodeStatus) 
+{
+    char usersString[20];
+    sprintf(usersString, "%d/%d", nodeStatus->getNumOnline(), nodeStatus->getNumTotal());
+    display->drawFastImage(x, y, 8, 8, imgUser);
+    display->drawString(x + 10, y - 2, usersString);
+}
+
+// Draw GPS status summary
+static void drawGPS(OLEDDisplay *display, int16_t x, int16_t y, const GPSStatus *gps)
+{
+    if (!gps->getIsConnected()) {
+        display->drawString(x, y - 2, "No GPS");
+        return;
+    }
+    display->drawFastImage(x, y, 6, 8, gps->getHasLock() ? imgPositionSolid : imgPositionEmpty);
+    if (!gps->getHasLock()) {
+        display->drawString(x + 8, y - 2, "No sats");
+        return;
+    }
+    if (gps->getDOP() <= 100) {
+        display->drawString(x + 8, y - 2, "Ideal");
+        return;
+    }
+    if (gps->getDOP() <= 200) {
+        display->drawString(x + 8, y - 2, "Exc.");
+        return;
+    }
+    if (gps->getDOP() <= 500) {
+        display->drawString(x + 8, y - 2, "Good");
+        return;
+    }
+    if (gps->getDOP() <= 1000) {
+        display->drawString(x + 8, y - 2, "Mod.");
+        return;
+    }
+    if (gps->getDOP() <= 2000) {
+        display->drawString(x + 8, y - 2, "Fair");
+        return;
+    }
+    if (gps->getDOP() > 0) {
+        display->drawString(x + 8, y - 2, "Poor");
+        return;
+    }
 }
 
 /// Ported from my old java code, returns distance in meters along the globe
@@ -291,6 +384,30 @@ static bool hasPosition(NodeInfo *n)
 static size_t nodeIndex;
 static int8_t prevFrame = -1;
 
+// Draw the compass and arrow pointing to location
+static void drawCompass(OLEDDisplay *display, int16_t compassX, int16_t compassY, float headingRadian)
+{
+    // display->drawXbm(compassX, compassY, compass_width, compass_height,
+    // (const uint8_t *)compass_bits);
+
+    Point tip(0.0f, 0.5f), tail(0.0f, -0.5f); // pointing up initially
+    float arrowOffsetX = 0.2f, arrowOffsetY = 0.2f;
+    Point leftArrow(tip.x - arrowOffsetX, tip.y - arrowOffsetY), rightArrow(tip.x + arrowOffsetX, tip.y - arrowOffsetY);
+
+    Point *points[] = {&tip, &tail, &leftArrow, &rightArrow};
+
+    for (int i = 0; i < 4; i++) {
+        points[i]->rotate(headingRadian);
+        points[i]->scale(COMPASS_DIAM * 0.6);
+        points[i]->translate(compassX, compassY);
+    }
+    drawLine(display, tip, tail);
+    drawLine(display, leftArrow, tip);
+    drawLine(display, rightArrow, tip);
+
+    display->drawCircle(compassX, compassY, COMPASS_DIAM / 2);
+}
+
 /// Convert an integer GPS coords to a floating point
 #define DegD(i) (i * 1e-7)
 
@@ -324,7 +441,7 @@ static void drawNodeInfo(OLEDDisplay *display, OLEDDisplayUiState *state, int16_
     const char *username = node->has_user ? node->user.long_name : "Unknown Name";
 
     static char signalStr[20];
-    snprintf(signalStr, sizeof(signalStr), "Signal: %.0f", node->snr);
+    snprintf(signalStr, sizeof(signalStr), "Signal: %d%%", clamp((int)((node->snr + 10) * 5), 0, 100));
 
     uint32_t agoSecs = sinceLastSeen(node);
     static char lastStr[20];
@@ -335,15 +452,16 @@ static void drawNodeInfo(OLEDDisplay *display, OLEDDisplayUiState *state, int16_
     else
         snprintf(lastStr, sizeof(lastStr), "%u hours ago", agoSecs / 60 / 60);
 
-    static float simRadian;
-    simRadian += 0.1; // For testing, have the compass spin unless both
-                      // locations are valid
-
     static char distStr[20];
-    *distStr = 0; // might not have location data
-    float headingRadian = simRadian;
+    strcpy(distStr, "? km"); // might not have location data
+    float headingRadian;
     NodeInfo *ourNode = nodeDB.getNode(nodeDB.getNodeNum());
-    if (ourNode && hasPosition(ourNode) && hasPosition(node)) {
+    const char *fields[] = {username, distStr, signalStr, lastStr, NULL};
+
+    // coordinates for the center of the compass/circle
+    int16_t compassX = x + SCREEN_WIDTH - COMPASS_DIAM / 2 - 1, compassY = y + SCREEN_HEIGHT / 2;
+
+    if (ourNode && hasPosition(ourNode) && hasPosition(node)) { // display direction toward node
         Position &op = ourNode->position, &p = node->position;
         float d = latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
         if (d < 2000)
@@ -356,35 +474,17 @@ static void drawNodeInfo(OLEDDisplay *display, OLEDDisplayUiState *state, int16_
         float bearingToOther = bearing(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
         float myHeading = estimatedHeading(DegD(p.latitude_i), DegD(p.longitude_i));
         headingRadian = bearingToOther - myHeading;
-    } else {
+        drawCompass(display, compassX, compassY, headingRadian);
+    } else { // direction to node is unknown so display question mark
         // Debug info for gps lock errors
         // DEBUG_MSG("ourNode %d, ourPos %d, theirPos %d\n", !!ourNode, ourNode && hasPosition(ourNode), hasPosition(node));
+
+        display->drawString(compassX - FONT_HEIGHT / 4, compassY - FONT_HEIGHT / 2, "?");
+        display->drawCircle(compassX, compassY, COMPASS_DIAM / 2);
     }
 
-    const char *fields[] = {username, distStr, signalStr, lastStr, NULL};
+    // Must be after distStr is populated
     drawColumns(display, x, y, fields);
-
-    // coordinates for the center of the compass
-    int16_t compassX = x + SCREEN_WIDTH - COMPASS_DIAM / 2 - 1, compassY = y + SCREEN_HEIGHT / 2;
-    // display->drawXbm(compassX, compassY, compass_width, compass_height,
-    // (const uint8_t *)compass_bits);
-
-    Point tip(0.0f, 0.5f), tail(0.0f, -0.5f); // pointing up initially
-    float arrowOffsetX = 0.2f, arrowOffsetY = 0.2f;
-    Point leftArrow(tip.x - arrowOffsetX, tip.y - arrowOffsetY), rightArrow(tip.x + arrowOffsetX, tip.y - arrowOffsetY);
-
-    Point *points[] = {&tip, &tail, &leftArrow, &rightArrow};
-
-    for (int i = 0; i < 4; i++) {
-        points[i]->rotate(headingRadian);
-        points[i]->scale(COMPASS_DIAM * 0.6);
-        points[i]->translate(compassX, compassY);
-    }
-    drawLine(display, tip, tail);
-    drawLine(display, leftArrow, tip);
-    drawLine(display, rightArrow, tip);
-
-    display->drawCircle(compassX, compassY, COMPASS_DIAM / 2);
 }
 
 #if 0
@@ -452,6 +552,9 @@ void Screen::setup()
     // Store a pointer to Screen so we can get to it from static functions.
     ui.getUiState()->userData = this;
 
+    // Set the utf8 conversion function
+    dispdev.setFontTableLookupFunction(customFontTableLookup);
+
     // Add frames.
     static FrameCallback bootFrames[] = {drawBootScreen};
     static const int bootFrameCount = sizeof(bootFrames) / sizeof(bootFrames[0]);
@@ -476,6 +579,11 @@ void Screen::setup()
     // twice initially.
     ui.update();
     ui.update();
+
+    // Subscribe to status updates
+    powerStatusObserver.observe(&powerStatus->onNewStatus);
+    gpsStatusObserver.observe(&gpsStatus->onNewStatus);
+    nodeStatusObserver.observe(&nodeStatus->onNewStatus);
 }
 
 void Screen::doTask()
@@ -537,14 +645,7 @@ void Screen::doTask()
     // While showing the bootscreen or Bluetooth pair screen all of our
     // standard screen switching is stopped.
     if (showingNormalScreen) {
-        // TODO(girts): decouple nodeDB from screen.
-        // standard screen loop handling ehre
-        // If the # nodes changes, we need to regen our list of screens
-        if (nodeDB.updateGUI || nodeDB.updateTextMessage) {
-            setFrames();
-            nodeDB.updateGUI = false;
-            nodeDB.updateTextMessage = false;
-        }
+        // standard screen loop handling here
     }
 
     ui.update();
@@ -569,8 +670,8 @@ void Screen::setFrames()
     DEBUG_MSG("showing standard frames\n");
     showingNormalScreen = true;
 
-    size_t numnodes = nodeDB.getNumNodes();
     // We don't show the node info our our node (if we have it yet - we should)
+    size_t numnodes = nodeStatus->getNumTotal();
     if (numnodes > 0)
         numnodes--;
 
@@ -644,35 +745,56 @@ void DebugInfo::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // The coordinates define the left starting point of the text
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
-    char usersStr[20];
     char channelStr[20];
-    char batStr[20];
-    char gpsStr[20];
     {
         LockGuard guard(&lock);
-        snprintf(usersStr, sizeof(usersStr), "Users %d/%d", nodesOnline, nodesTotal);
-        snprintf(channelStr, sizeof(channelStr), "%s", channelName.c_str());
-        if (powerStatus.haveBattery) {
-            // TODO: draw a battery icon instead of letter "B".
-            int batV = powerStatus.batteryVoltageMv / 1000;
-            int batCv = (powerStatus.batteryVoltageMv % 1000) / 10;
-            snprintf(batStr, sizeof(batStr), "B %01d.%02dV%c%c", batV, batCv, powerStatus.charging ? '+' : ' ',
-                     powerStatus.usb ? 'U' : ' ');
-        } else {
-            snprintf(batStr, sizeof(batStr), "%s", powerStatus.usb ? "USB" : "");
-        }
+        snprintf(channelStr, sizeof(channelStr), "#%s", channelName.c_str());
 
-        if (!gpsStatus.empty()) {
-            snprintf(gpsStr, sizeof(gpsStr), "GPS %s", gpsStatus.c_str());
-        } else {
-            gpsStr[0] = '\0'; // Just show empty string.
-        }
+        // Display power status
+        if (powerStatus->getHasBattery())
+            drawBattery(display, x, y + 2, imgBattery, powerStatus);
+        else
+            display->drawFastImage(x, y + 2, 16, 8, powerStatus->getHasUSB() ? imgUSB : imgPower);
+        // Display nodes status
+        drawNodes(display, x + (SCREEN_WIDTH * 0.25), y + 2, nodeStatus);
+        // Display GPS status
+        drawGPS(display, x + (SCREEN_WIDTH * 0.66), y + 2, gpsStatus);
     }
 
-    const char *fields[] = {batStr, gpsStr, usersStr, channelStr, nullptr};
-    uint32_t yo = drawRows(display, x, y, fields);
+    display->drawString(x, y + FONT_HEIGHT, channelStr);
 
-    display->drawLogBuffer(x, yo);
+    display->drawLogBuffer(x, y + (FONT_HEIGHT * 2));
+
+    /* Display a heartbeat pixel that blinks every time the frame is redrawn
+    if(heartbeat) display->setPixel(0, 0);
+    heartbeat = !heartbeat;
+    */
 }
 
+// adjust Brightness cycle trough 1 to 254 as long as attachDuringLongPress is true
+void Screen::adjustBrightness()
+{
+    if (brightness == 254) {
+        brightness = 0;
+    } else {
+        brightness++;
+    }
+    int width = brightness / (254.00 / SCREEN_WIDTH);
+    dispdev.drawRect(0, 30, SCREEN_WIDTH, 4);
+    dispdev.fillRect(0, 31, width, 2);
+    dispdev.display();
+    dispdev.setBrightness(brightness);
+}
+
+int Screen::handleStatusUpdate(const Status *arg) {
+    DEBUG_MSG("Screen got status update %d\n", arg->getStatusType());
+    switch(arg->getStatusType())
+    {
+        case STATUS_TYPE_NODE:
+            setFrames();
+            break;
+    }
+    setPeriod(1); // Update the screen right away
+    return 0;
+}
 } // namespace meshtastic

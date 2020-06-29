@@ -73,6 +73,20 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define BUTTON_PIN PIN_BUTTON1
 
 // FIXME, use variant.h defs for all of this!!! (even on the ESP32 targets)
+#elif defined(CubeCell_BoardPlus)
+
+//
+// Standard definitions for CubeCell targets
+//
+
+#define NO_ESP32 // Don't use ESP32 libs (mainly bluetooth)
+
+// FIXME, not yet ready for NRF52
+#define RTC_DATA_ATTR
+
+#define LED_PIN -1 // FIXME totally bogus
+#define BUTTON_PIN -1
+
 #else
 
 //
@@ -104,6 +118,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #define SSD1306_ADDRESS 0x3C
 
+// The SH1106 controller is almost, but not quite, the same as SSD1306
+// Define this if you know you have that controller or your "SSD1306" misbehaves.
+//#define USE_SH1106
+
 // Flip the screen upside down by default as it makes more sense on T-BEAM
 // devices. Comment this out to not rotate screen 180 degrees.
 #define FLIP_SCREEN_VERTICALLY
@@ -126,7 +144,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define I2C_SDA 21
 #define I2C_SCL 22
 
-#define BUTTON_PIN 38
+#define BUTTON_PIN 38     // The middle button GPIO on the T-Beam
+#define BUTTON_PIN_ALT 13 // Alternate GPIO for an external button if needed
 
 #ifndef USE_JTAG
 #define RESET_GPIO 14
@@ -168,6 +187,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 // This string must exactly match the case used in release file names or the android updater won't work
 #define HW_VENDOR "heltec"
 
+// the default ESP32 Pin of 15 is the Oled SCL, set to 36 and 37 and works fine.
+// Tested on Neo6m module.
+#undef GPS_RX_PIN
+#undef GPS_TX_PIN
+#define GPS_RX_PIN 36
+#define GPS_TX_PIN 37
+
 #ifndef USE_JTAG  // gpio15 is TDO for JTAG, so no I2C on this board while doing jtag
 #define I2C_SDA 4 // I2C pins for this board
 #define I2C_SCL 15
@@ -188,6 +214,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #elif defined(TTGO_LORA_V1)
 // This string must exactly match the case used in release file names or the android updater won't work
 #define HW_VENDOR "ttgo-lora32-v1"
+#undef GPS_RX_PIN
+#undef GPS_TX_PIN
+#define GPS_RX_PIN 36
+#define GPS_TX_PIN 37
 
 #define I2C_SDA 4 // I2C pins for this board
 #define I2C_SCL 15
@@ -205,6 +235,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #elif defined(TTGO_LORA_V2)
 // This string must exactly match the case used in release file names or the android updater won't work
 #define HW_VENDOR "ttgo-lora32-v2"
+
+#undef GPS_RX_PIN
+#undef GPS_TX_PIN
+#define GPS_RX_PIN 36
+#define GPS_TX_PIN 13 // per @eugene
 
 #define I2C_SDA 21 // I2C pins for this board
 #define I2C_SCL 22
@@ -256,9 +291,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #define DEBUG_PORT console // Serial debug port
 
-#ifdef NO_ESP32
+// What platforms should use SEGGER?
+#ifdef NRF52_SERIES
 #define USE_SEGGER
+#else
+#define SERIAL0_RX_GPIO 3 // Always GPIO3 on ESP32
 #endif
+
 #ifdef USE_SEGGER
 #include "SEGGER_RTT.h"
 #define DEBUG_MSG(...) SEGGER_RTT_printf(0, __VA_ARGS__)

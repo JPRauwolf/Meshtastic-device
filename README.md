@@ -24,13 +24,16 @@ We currently support three models of radios.
 
 - TTGO T-Beam
 
-  - [T-Beam V1.0 w/ NEO-M8N](https://www.aliexpress.com/item/33047631119.html) (Recommended)
-  - [T-Beam V1.0 w/ NEO-6M](https://www.aliexpress.com/item/33050391850.html)
+  - [T-Beam V1.0 w/ NEO-6M - special Meshtastic version](https://www.aliexpress.com/item/4001178678568.html) (Includes built-in OLED display and they have **preinstalled** the meshtastic software)
+  - [T-Beam V1.0 w/ NEO-M8N](https://www.aliexpress.com/item/33047631119.html) (slightly better GPS)
   - 3D printable cases
     - [T-Beam V0](https://www.thingiverse.com/thing:3773717)
     - [T-Beam V1](https://www.thingiverse.com/thing:3830711)
 
 - [TTGO LORA32](https://www.aliexpress.com/item/4000211331316.html) - No GPS
+
+  - 3D printable case
+    - [TTGO LORA32 v1](https://www.thingiverse.com/thing:3385109)
 
 - [Heltec LoRa 32](https://heltec.org/project/wifi-lora-32/) - No GPS
   - [3D Printable case](https://www.thingiverse.com/thing:3125854)
@@ -39,13 +42,15 @@ We currently support three models of radios.
 
 - US/JP/AU/NZ - 915MHz
 - CN - 470MHz
-- EU - 870MHz
+- EU - 868MHz, 433MHz
 
 Getting a version that includes a screen is optional, but highly recommended.
 
 ## Firmware Installation
 
 Prebuilt binaries for the supported radios are available in our [releases](https://github.com/meshtastic/Meshtastic-esp32/releases). Your initial installation has to happen over USB from your Mac, Windows or Linux PC. Once our software is installed, all future software updates happen over bluetooth from your phone.
+
+Be **very careful** to install the correct load for your board. In particular the popular 'T-BEAM' radio from TTGO is not called 'TTGO-Lora' (that is a different board). So don't install the 'TTGO-Lora' build on a TBEAM, it won't work correctly.
 
 Please post comments on our [group chat](https://meshtastic.discourse.group/) if you have problems or successes.
 
@@ -168,7 +173,7 @@ Hard resetting via RTS pin...
 
 # Meshtastic Android app
 
-The companion (optional) Meshtastic Android app is [here](https://github.com/meshtastic/Meshtastic-Android). You can also download it on Google Play.
+The companion (optional) Meshtastic Android app is [here](https://play.google.com/store/apps/details?id=com.geeksville.mesh&referrer=utm_source%3Dgithub-dev-readme). You can also download it on Google Play.
 
 # Python API
 

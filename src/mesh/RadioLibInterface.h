@@ -3,6 +3,10 @@
 #include "PeriodicTask.h"
 #include "RadioInterface.h"
 
+#ifdef CubeCell_BoardPlus
+#define RADIOLIB_SOFTWARE_SERIAL_UNSUPPORTED
+#endif
+
 #include <RadioLib.h>
 
 // ESP32 has special rules about ISR code
@@ -28,6 +32,8 @@ class RadioLibInterface : public RadioInterface, private PeriodicTask
      * Debugging counts
      */
     uint32_t rxBad = 0, rxGood = 0, txGood = 0;
+
+    PointerQueue<MeshPacket> txQueue = PointerQueue<MeshPacket>(MAX_TX_QUEUE);
 
   protected:
     float bw = 125;
@@ -89,9 +95,6 @@ class RadioLibInterface : public RadioInterface, private PeriodicTask
     virtual void startReceive() = 0;
 
   private:
-    /** start an immediate transmit */
-    void startSend(MeshPacket *txp);
-
     /** if we have something waiting to send, start a short random timer so we can come check for collision before actually doing
      * the transmit
      *
@@ -106,12 +109,20 @@ class RadioLibInterface : public RadioInterface, private PeriodicTask
 
     virtual void doTask();
 
+    /** start an immediate transmit
+     *  This method is virtual so subclasses can hook as needed, subclasses should not call directly
+     */
+    virtual void startSend(MeshPacket *txp);
+
   protected:
     /// Initialise the Driver transport hardware and software.
     /// Make sure the Driver is properly configured before calling init().
     /// \return true if initialisation succeeded.
     virtual bool init();
-    
+
+    /** Do any hardware setup needed on entry into send configuration for the radio.  Subclasses can customize */
+    virtual void configHardwareForSend() {}
+
     /**
      * Convert our modemConfig enum into wf, sf, etc...
      *

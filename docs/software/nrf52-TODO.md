@@ -2,11 +2,24 @@
 
 ## Misc work items
 
+RAM investigation.
+nRF52832-QFAA 64KB ram, 512KB flash vs
+nrf52832-QFAB 32KB ram, 512kb flash
+nrf52840 256KB RAM, 1MB flash
+
+platform.json
+
+    "framework-arduinoadafruitnrf52": {
+      "type": "framework",
+      "optional": true,
+      "version": "https://github.com/meshtastic/Adafruit_nRF52_Arduino.git"
+    },
+
 ## Initial work items
 
 Minimum items needed to make sure hardware is good.
 
-- set power UICR per https://devzone.nordicsemi.com/f/nordic-q-a/28562/nrf52840-regulator-configuration
+- DONE set power UICR per https://devzone.nordicsemi.com/f/nordic-q-a/28562/nrf52840-regulator-configuration
 - switch charge controller into / out of performance mode (see 8.3.1 in datasheet)
 - write UC1701 wrapper
 - Test hardfault handler for null ptrs (if one isn't already installed)
@@ -59,8 +72,6 @@ Needed to be fully functional at least at the same level of the ESP32 boards. At
 
 Nice ideas worth considering someday...
 
-- Use flego to me an iOS/linux app? https://felgo.com/doc/qt/qtbluetooth-index/ or
-- Use flutter to make an iOS/linux app? https://github.com/Polidea/FlutterBleLib
 - enable monitor mode debugging (need to use real jlink): https://devzone.nordicsemi.com/nordic/nordic-blog/b/blog/posts/monitor-mode-debugging-with-j-link-and-gdbeclipse
 - Improve efficiency of PeriodicTimer by only checking the next queued timer event, and carefully sorting based on schedule
 - make a Mfg Controller and device under test classes as examples of custom app code for third party devs. Make a post about this. Use a custom payload type code. Have device under test send a broadcast with max hopcount of 0 for the 'mfgcontroller' payload type. mfg controller will read SNR and reply. DOT will declare failure/success and switch to the regular app screen.
