@@ -10,16 +10,14 @@
 #include <SSD1306Wire.h>
 #endif
 
-#include "PeriodicTask.h"
+#include "concurrency/PeriodicTask.h"
 #include "TypedQueue.h"
-#include "lock.h"
-#include "PowerStatus.h"
-#include "GPSStatus.h"
-#include "NodeStatus.h"
-#include "Observer.h"
+#include "concurrency/LockGuard.h"
+#include "power.h"
+#include "commands.h"
 #include <string>
 
-namespace meshtastic
+namespace graphics
 {
 
 // Forward declarations
@@ -35,7 +33,7 @@ class DebugInfo
     /// Sets the name of the channel.
     void setChannelNameStatus(const char *name)
     {
-        LockGuard guard(&lock);
+        concurrency::LockGuard guard(&lock);
         channelName = name;
     }
 
@@ -50,21 +48,21 @@ class DebugInfo
     std::string channelName;
 
     /// Protects all of internal state.
-    Lock lock;
+    concurrency::Lock lock;
 };
 
-/// Deals with showing things on the screen of the device.
-//
-// Other than setup(), this class is thread-safe. All state-changing calls are
-// queued and executed when the main loop calls us.
-//
-// This class is thread-safe (as long as drawFrame is not called multiple times
-// simultaneously).
-class Screen : public PeriodicTask
+/**
+ * @brief This class deals with showing things on the screen of the device.
+ * 
+ * @details Other than setup(), this class is thread-safe as long as drawFrame is not called 
+ *          multiple times simultaneously. All state-changing calls are queued and executed 
+ *          when the main loop calls us.
+ */
+class Screen : public concurrency::PeriodicTask
 {
-    CallbackObserver<Screen, const Status *> powerStatusObserver = CallbackObserver<Screen, const Status *>(this, &Screen::handleStatusUpdate);
-    CallbackObserver<Screen, const Status *> gpsStatusObserver = CallbackObserver<Screen, const Status *>(this, &Screen::handleStatusUpdate);
-    CallbackObserver<Screen, const Status *> nodeStatusObserver = CallbackObserver<Screen, const Status *>(this, &Screen::handleStatusUpdate);
+    CallbackObserver<Screen, const meshtastic::Status *> powerStatusObserver = CallbackObserver<Screen, const meshtastic::Status *>(this, &Screen::handleStatusUpdate);
+    CallbackObserver<Screen, const meshtastic::Status *> gpsStatusObserver = CallbackObserver<Screen, const meshtastic::Status *>(this, &Screen::handleStatusUpdate);
+    CallbackObserver<Screen, const meshtastic::Status *> nodeStatusObserver = CallbackObserver<Screen, const meshtastic::Status *>(this, &Screen::handleStatusUpdate);
 
   public:
     Screen(uint8_t address, int sda = -1, int scl = -1);
@@ -84,15 +82,15 @@ class Screen : public PeriodicTask
             handleSetOn(
                 false); // We handle off commands immediately, because they might be called because the CPU is shutting down
         else
-            enqueueCmd(CmdItem{.cmd = on ? Cmd::SET_ON : Cmd::SET_OFF});
+            enqueueCmd(ScreenCmd{.cmd = on ? Cmd::SET_ON : Cmd::SET_OFF});
     }
 
     /// Handles a button press.
-    void onPress() { enqueueCmd(CmdItem{.cmd = Cmd::ON_PRESS}); }
+    void onPress() { enqueueCmd(ScreenCmd{.cmd = Cmd::ON_PRESS}); }
 
     // Implementation to Adjust Brightness
     void adjustBrightness();
-    int brightness = 150;
+    uint8_t brightness = 150;
 
     /// Starts showing the Bluetooth PIN screen.
     //
@@ -100,22 +98,22 @@ class Screen : public PeriodicTask
     // with the PIN.
     void startBluetoothPinScreen(uint32_t pin)
     {
-        CmdItem cmd;
+        ScreenCmd cmd;
         cmd.cmd = Cmd::START_BLUETOOTH_PIN_SCREEN;
         cmd.bluetooth_pin = pin;
         enqueueCmd(cmd);
     }
 
     /// Stops showing the bluetooth PIN screen.
-    void stopBluetoothPinScreen() { enqueueCmd(CmdItem{.cmd = Cmd::STOP_BLUETOOTH_PIN_SCREEN}); }
+    void stopBluetoothPinScreen() { enqueueCmd(ScreenCmd{.cmd = Cmd::STOP_BLUETOOTH_PIN_SCREEN}); }
 
     /// Stops showing the boot screen.
-    void stopBootScreen() { enqueueCmd(CmdItem{.cmd = Cmd::STOP_BOOT_SCREEN}); }
+    void stopBootScreen() { enqueueCmd(ScreenCmd{.cmd = Cmd::STOP_BOOT_SCREEN}); }
 
     /// Writes a string to the screen.
     void print(const char *text)
     {
-        CmdItem cmd;
+        ScreenCmd cmd;
         cmd.cmd = Cmd::PRINT;
         // TODO(girts): strdup() here is scary, but we can't use std::string as
         // FreeRTOS queue is just dumbly copying memory contents. It would be
@@ -160,7 +158,7 @@ class Screen : public PeriodicTask
     /// Returns a handle to the DebugInfo screen.
     //
     // Use this handle to set things like battery status, user count, GPS status, etc.
-    DebugInfo *debug() { return &debugInfo; }
+    DebugInfo* debug_info() { return &debugInfo; }
 
     int handleStatusUpdate(const meshtastic::Status *arg);
 
@@ -171,17 +169,7 @@ class Screen : public PeriodicTask
     void doTask() final;
 
   private:
-    enum class Cmd {
-        INVALID,
-        SET_ON,
-        SET_OFF,
-        ON_PRESS,
-        START_BLUETOOTH_PIN_SCREEN,
-        STOP_BLUETOOTH_PIN_SCREEN,
-        STOP_BOOT_SCREEN,
-        PRINT,
-    };
-    struct CmdItem {
+    struct ScreenCmd {
         Cmd cmd;
         union {
             uint32_t bluetooth_pin;
@@ -190,7 +178,7 @@ class Screen : public PeriodicTask
     };
 
     /// Enques given command item to be processed by main loop().
-    bool enqueueCmd(const CmdItem &cmd)
+    bool enqueueCmd(const ScreenCmd &cmd)
     {
         if (!useDisplay)
             return true; // claim success if our display is not in use
@@ -214,7 +202,7 @@ class Screen : public PeriodicTask
     static void drawDebugInfoTrampoline(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 
     /// Queue of commands to execute in doTask.
-    TypedQueue<CmdItem> cmdQueue;
+    TypedQueue<ScreenCmd> cmdQueue;
     /// Whether we are using a display
     bool useDisplay = false;
     /// Whether the display is currently powered
@@ -225,7 +213,9 @@ class Screen : public PeriodicTask
 
     /// Holds state for debug information
     DebugInfo debugInfo;
+
     /// Display device
+    /** @todo display abstraction */
 #ifdef USE_SH1106
     SH1106Wire dispdev;
 #else
@@ -235,4 +225,4 @@ class Screen : public PeriodicTask
     OLEDDisplayUi ui;
 };
 
-} // namespace meshtastic
+} // namespace graphics

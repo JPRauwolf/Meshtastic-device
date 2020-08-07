@@ -26,28 +26,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "MeshService.h"
 #include "NodeDB.h"
 #include "configuration.h"
-#include "fonts.h"
-#include "images.h"
+#include "graphics/images.h"
 #include "main.h"
 #include "mesh-pb-constants.h"
-#include "screen.h"
+#include "Screen.h"
 #include "utils.h"
+#include "configs.h"
 
-#define FONT_HEIGHT 14 // actually 13 for "ariel 10" but want a little extra space
-#define FONT_HEIGHT_16 (ArialMT_Plain_16[1] + 1)
-#ifdef USE_SH1106
-#define SCREEN_WIDTH 132
-#else
-#define SCREEN_WIDTH 128
-#endif
-#define SCREEN_HEIGHT 64
-#define TRANSITION_FRAMERATE 30 // fps
-#define IDLE_FRAMERATE 1        // in fps
-#define COMPASS_DIAM 44
+using namespace meshtastic; /** @todo remove */
 
-#define NUM_EXTRA_FRAMES 2 // text message and debug frame
-
-namespace meshtastic
+namespace graphics
 {
 
 // A text message frame + debug frame + all the node infos
@@ -55,8 +43,14 @@ static FrameCallback normalFrames[MAX_NUM_NODES + NUM_EXTRA_FRAMES];
 static uint32_t targetFramerate = IDLE_FRAMERATE;
 static char btPIN[16] = "888888";
 
-uint8_t imgBattery[16] = { 0xFF, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xE7, 0x3C };
+uint8_t imgBattery[16] =  { 0xFF, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xE7, 0x3C };
+uint8_t imgSatellite[8] = { 0x70, 0x71, 0x22, 0xFA, 0xFA, 0x22, 0x71, 0x70 };
+
+uint32_t dopThresholds[5] = { 2000, 1000, 500, 200, 100 };
+
+#ifdef SHOW_REDRAWS
 static bool heartbeat = false;
+#endif
 
 static void drawBootScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
@@ -177,10 +171,10 @@ static void drawColumns(OLEDDisplay *display, int16_t x, int16_t y, const char *
 #endif
 
 // Draw power bars or a charging indicator on an image of a battery, determined by battery charge voltage or percentage.
-static void drawBattery(OLEDDisplay *display, int16_t x, int16_t y, uint8_t *imgBuffer, const PowerStatus *powerStatus) 
+static void drawBattery(OLEDDisplay *display, int16_t x, int16_t y, uint8_t *imgBuffer, const PowerStatus *powerStatus)
 {
-    static const uint8_t powerBar[3] = { 0x81, 0xBD, 0xBD };
-    static const uint8_t lightning[8] = { 0xA1, 0xA1, 0xA5, 0xAD, 0xB5, 0xA5, 0x85, 0x85 };
+    static const uint8_t powerBar[3] = {0x81, 0xBD, 0xBD};
+    static const uint8_t lightning[8] = {0xA1, 0xA1, 0xA5, 0xAD, 0xB5, 0xA5, 0x85, 0x85};
     // Clear the bar area on the battery image
     for (int i = 1; i < 14; i++) {
         imgBuffer[i] = 0x81;
@@ -191,7 +185,7 @@ static void drawBattery(OLEDDisplay *display, int16_t x, int16_t y, uint8_t *img
         // If not charging, Draw power bars
     } else {
         for (int i = 0; i < 4; i++) {
-            if(powerStatus->getBatteryChargePercent() >= 25 * i) 
+            if (powerStatus->getBatteryChargePercent() >= 25 * i)
                 memcpy(imgBuffer + 1 + (i * 3), powerBar, 3);
         }
     }
@@ -199,7 +193,7 @@ static void drawBattery(OLEDDisplay *display, int16_t x, int16_t y, uint8_t *img
 }
 
 // Draw nodes status
-static void drawNodes(OLEDDisplay *display, int16_t x, int16_t y, NodeStatus *nodeStatus) 
+static void drawNodes(OLEDDisplay *display, int16_t x, int16_t y, NodeStatus *nodeStatus)
 {
     char usersString[20];
     sprintf(usersString, "%d/%d", nodeStatus->getNumOnline(), nodeStatus->getNumTotal());
@@ -210,38 +204,39 @@ static void drawNodes(OLEDDisplay *display, int16_t x, int16_t y, NodeStatus *no
 // Draw GPS status summary
 static void drawGPS(OLEDDisplay *display, int16_t x, int16_t y, const GPSStatus *gps)
 {
-    if (!gps->getIsConnected()) {
+    if (!gps->getIsConnected()) 
+    {
         display->drawString(x, y - 2, "No GPS");
         return;
     }
     display->drawFastImage(x, y, 6, 8, gps->getHasLock() ? imgPositionSolid : imgPositionEmpty);
-    if (!gps->getHasLock()) {
+    if (!gps->getHasLock()) 
+    {
         display->drawString(x + 8, y - 2, "No sats");
         return;
-    }
-    if (gps->getDOP() <= 100) {
-        display->drawString(x + 8, y - 2, "Ideal");
-        return;
-    }
-    if (gps->getDOP() <= 200) {
-        display->drawString(x + 8, y - 2, "Exc.");
-        return;
-    }
-    if (gps->getDOP() <= 500) {
-        display->drawString(x + 8, y - 2, "Good");
-        return;
-    }
-    if (gps->getDOP() <= 1000) {
-        display->drawString(x + 8, y - 2, "Mod.");
-        return;
-    }
-    if (gps->getDOP() <= 2000) {
-        display->drawString(x + 8, y - 2, "Fair");
-        return;
-    }
-    if (gps->getDOP() > 0) {
-        display->drawString(x + 8, y - 2, "Poor");
-        return;
+    } 
+    else 
+    {
+        char satsString[3];
+        uint8_t bar[2] = { 0 };
+
+        //Draw DOP signal bars
+        for(int i = 0; i < 5; i++)
+        {
+            if (gps->getDOP() <= dopThresholds[i])
+                bar[0] = ~((1 << (5 - i)) - 1);
+            else
+                bar[0] = 0b10000000;
+            //bar[1] = bar[0];
+            display->drawFastImage(x + 9 + (i * 2), y, 2, 8, bar);
+        }
+
+        //Draw satellite image
+        display->drawFastImage(x + 24, y, 8, 8, imgSatellite);
+
+        //Draw the number of satellites
+        sprintf(satsString, "%d", gps->getNumSatellites());
+        display->drawString(x + 34, y - 2, satsString);
     }
 }
 
@@ -384,28 +379,41 @@ static bool hasPosition(NodeInfo *n)
 static size_t nodeIndex;
 static int8_t prevFrame = -1;
 
-// Draw the compass and arrow pointing to location
-static void drawCompass(OLEDDisplay *display, int16_t compassX, int16_t compassY, float headingRadian)
+// Draw the arrow pointing to a node's location
+static void drawNodeHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY, float headingRadian)
 {
-    // display->drawXbm(compassX, compassY, compass_width, compass_height,
-    // (const uint8_t *)compass_bits);
-
     Point tip(0.0f, 0.5f), tail(0.0f, -0.5f); // pointing up initially
     float arrowOffsetX = 0.2f, arrowOffsetY = 0.2f;
     Point leftArrow(tip.x - arrowOffsetX, tip.y - arrowOffsetY), rightArrow(tip.x + arrowOffsetX, tip.y - arrowOffsetY);
 
-    Point *points[] = {&tip, &tail, &leftArrow, &rightArrow};
+
+    Point *arrowPoints[] = {&tip, &tail, &leftArrow, &rightArrow};
 
     for (int i = 0; i < 4; i++) {
-        points[i]->rotate(headingRadian);
-        points[i]->scale(COMPASS_DIAM * 0.6);
-        points[i]->translate(compassX, compassY);
+        arrowPoints[i]->rotate(headingRadian);
+        arrowPoints[i]->scale(COMPASS_DIAM * 0.6);
+        arrowPoints[i]->translate(compassX, compassY);
     }
     drawLine(display, tip, tail);
     drawLine(display, leftArrow, tip);
     drawLine(display, rightArrow, tip);
+}
 
-    display->drawCircle(compassX, compassY, COMPASS_DIAM / 2);
+// Draw the compass heading
+static void drawCompassHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY, float myHeading)
+{
+    Point N1(-0.04f, -0.65f), N2( 0.04f, -0.65f);
+    Point N3(-0.04f, -0.55f), N4( 0.04f, -0.55f);
+    Point *rosePoints[] = {&N1, &N2, &N3, &N4};
+
+    for (int i = 0; i < 4; i++) {
+        rosePoints[i]->rotate(myHeading);
+        rosePoints[i]->scale(COMPASS_DIAM);
+        rosePoints[i]->translate(compassX, compassY);
+    }
+    drawLine(display, N1, N3);
+    drawLine(display, N2, N4);
+    drawLine(display, N1, N4);
 }
 
 /// Convert an integer GPS coords to a floating point
@@ -425,10 +433,13 @@ static void drawNodeInfo(OLEDDisplay *display, OLEDDisplayUiState *state, int16_
             nodeIndex = (nodeIndex + 1) % nodeDB.getNumNodes();
             n = nodeDB.getNodeByIndex(nodeIndex);
         }
-
-        // We just changed to a new node screen, ask that node for updated state
         displayedNodeNum = n->num;
-        service.sendNetworkPing(displayedNodeNum, true);
+
+        // We just changed to a new node screen, ask that node for updated state if it's older than 2 minutes
+        if(sinceLastSeen(n) > 120)
+        {
+            service.sendNetworkPing(displayedNodeNum, true);
+        }
     }
 
     NodeInfo *node = nodeDB.getNodeByIndex(nodeIndex);
@@ -459,29 +470,40 @@ static void drawNodeInfo(OLEDDisplay *display, OLEDDisplayUiState *state, int16_
     const char *fields[] = {username, distStr, signalStr, lastStr, NULL};
 
     // coordinates for the center of the compass/circle
-    int16_t compassX = x + SCREEN_WIDTH - COMPASS_DIAM / 2 - 1, compassY = y + SCREEN_HEIGHT / 2;
+    int16_t compassX = x + SCREEN_WIDTH - COMPASS_DIAM / 2 - 5, compassY = y + SCREEN_HEIGHT / 2;
+    bool hasNodeHeading = false;
 
-    if (ourNode && hasPosition(ourNode) && hasPosition(node)) { // display direction toward node
-        Position &op = ourNode->position, &p = node->position;
-        float d = latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
-        if (d < 2000)
-            snprintf(distStr, sizeof(distStr), "%.0f m", d);
-        else
-            snprintf(distStr, sizeof(distStr), "%.1f km", d / 1000);
+    if(ourNode && hasPosition(ourNode))
+    {
+        Position &op = ourNode->position;
+        float myHeading = estimatedHeading(DegD(op.latitude_i), DegD(op.longitude_i));
+        drawCompassHeading(display, compassX, compassY, myHeading);
 
-        // FIXME, also keep the guess at the operators heading and add/substract
-        // it.  currently we don't do this and instead draw north up only.
-        float bearingToOther = bearing(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
-        float myHeading = estimatedHeading(DegD(p.latitude_i), DegD(p.longitude_i));
-        headingRadian = bearingToOther - myHeading;
-        drawCompass(display, compassX, compassY, headingRadian);
-    } else { // direction to node is unknown so display question mark
+        if(hasPosition(node)) 
+        { 
+            // display direction toward node
+            hasNodeHeading = true;
+            Position &p = node->position;
+            float d = latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
+            if (d < 2000)
+                snprintf(distStr, sizeof(distStr), "%.0f m", d);
+            else
+                snprintf(distStr, sizeof(distStr), "%.1f km", d / 1000);
+
+            // FIXME, also keep the guess at the operators heading and add/substract
+            // it.  currently we don't do this and instead draw north up only.
+            float bearingToOther = bearing(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
+            headingRadian = bearingToOther - myHeading;
+            drawNodeHeading(display, compassX, compassY, headingRadian);
+        } 
+    }
+    if(!hasNodeHeading)
+        // direction to node is unknown so display question mark
         // Debug info for gps lock errors
         // DEBUG_MSG("ourNode %d, ourPos %d, theirPos %d\n", !!ourNode, ourNode && hasPosition(ourNode), hasPosition(node));
-
         display->drawString(compassX - FONT_HEIGHT / 4, compassY - FONT_HEIGHT / 2, "?");
-        display->drawCircle(compassX, compassY, COMPASS_DIAM / 2);
-    }
+    display->drawCircle(compassX, compassY, COMPASS_DIAM / 2);
+
 
     // Must be after distStr is populated
     drawColumns(display, x, y, fields);
@@ -532,7 +554,7 @@ void Screen::handleSetOn(bool on)
 
 void Screen::setup()
 {
-    PeriodicTask::setup();
+    concurrency::PeriodicTask::setup();
 
     // We don't set useDisplay until setup() is called, because some boards have a declaration of this object but the device
     // is never found when probing i2c and therefore we don't call setup and never want to do (invalid) accesses to this device.
@@ -596,7 +618,7 @@ void Screen::doTask()
 
     // Process incoming commands.
     for (;;) {
-        CmdItem cmd;
+        ScreenCmd cmd;
         if (!cmdQueue.dequeue(&cmd, 0)) {
             break;
         }
@@ -747,7 +769,7 @@ void DebugInfo::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     char channelStr[20];
     {
-        LockGuard guard(&lock);
+        concurrency::LockGuard guard(&lock);
         snprintf(channelStr, sizeof(channelStr), "#%s", channelName.c_str());
 
         // Display power status
@@ -758,17 +780,19 @@ void DebugInfo::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         // Display nodes status
         drawNodes(display, x + (SCREEN_WIDTH * 0.25), y + 2, nodeStatus);
         // Display GPS status
-        drawGPS(display, x + (SCREEN_WIDTH * 0.66), y + 2, gpsStatus);
+        drawGPS(display, x + (SCREEN_WIDTH * 0.63), y + 2, gpsStatus);
     }
 
     display->drawString(x, y + FONT_HEIGHT, channelStr);
 
     display->drawLogBuffer(x, y + (FONT_HEIGHT * 2));
 
-    /* Display a heartbeat pixel that blinks every time the frame is redrawn
-    if(heartbeat) display->setPixel(0, 0);
+    /* Display a heartbeat pixel that blinks every time the frame is redrawn */
+#ifdef SHOW_REDRAWS
+    if (heartbeat)
+        display->setPixel(0, 0);
     heartbeat = !heartbeat;
-    */
+#endif
 }
 
 // adjust Brightness cycle trough 1 to 254 as long as attachDuringLongPress is true
@@ -786,15 +810,20 @@ void Screen::adjustBrightness()
     dispdev.setBrightness(brightness);
 }
 
-int Screen::handleStatusUpdate(const Status *arg) {
-    DEBUG_MSG("Screen got status update %d\n", arg->getStatusType());
+int Screen::handleStatusUpdate(const meshtastic::Status *arg) 
+{
+    //DEBUG_MSG("Screen got status update %d\n", arg->getStatusType());
     switch(arg->getStatusType())
     {
         case STATUS_TYPE_NODE:
-            setFrames();
+            if (nodeDB.updateTextMessage || nodeStatus->getLastNumTotal() != nodeStatus->getNumTotal())
+                setFrames();
+            prevFrame = -1;
+            nodeDB.updateGUI = false;
+            nodeDB.updateTextMessage = false;
             break;
     }
     setPeriod(1); // Update the screen right away
     return 0;
 }
-} // namespace meshtastic
+} // namespace graphics

@@ -5,14 +5,15 @@
 
 #include "GPS.h"
 //#include "MeshBluetoothService.h"
+#include "../concurrency/Periodic.h"
+#include "BluetoothCommon.h" // needed for updateBatteryLevel, FIXME, eventually when we pull mesh out into a lib we shouldn't be whacking bluetooth from here
 #include "MeshService.h"
 #include "NodeDB.h"
-#include "Periodic.h"
 #include "PowerFSM.h"
 #include "main.h"
 #include "mesh-pb-constants.h"
 #include "power.h"
-#include "BluetoothUtil.h" // needed for updateBatteryLevel, FIXME, eventually when we pull mesh out into a lib we shouldn't be whacking bluetooth from here
+#include "timing.h"
 
 /*
 receivedPacketQueue - this is a queue of messages we've received from the mesh, which we are keeping to deliver to the phone.
@@ -55,7 +56,7 @@ static uint32_t sendOwnerCb()
     return radioConfig.preferences.send_owner_interval * radioConfig.preferences.position_broadcast_secs * 1000;
 }
 
-static Periodic sendOwnerPeriod(sendOwnerCb);
+static concurrency::Periodic sendOwnerPeriod(sendOwnerCb);
 
 MeshService::MeshService() : toPhoneQueue(MAX_RX_TOPHONE)
 {
@@ -282,8 +283,6 @@ void MeshService::sendOurPosition(NodeNum dest, bool wantReplies)
     sendToMesh(p);
 }
 
-
-
 int MeshService::onGPSChanged(void *unused)
 {
     // DEBUG_MSG("got gps notify\n");
@@ -308,7 +307,7 @@ int MeshService::onGPSChanged(void *unused)
 
     // We limit our GPS broadcasts to a max rate
     static uint32_t lastGpsSend;
-    uint32_t now = millis();
+    uint32_t now = timing::millis();
     if (lastGpsSend == 0 || now - lastGpsSend > radioConfig.preferences.position_broadcast_secs * 1000) {
         lastGpsSend = now;
         DEBUG_MSG("Sending position to mesh\n");
