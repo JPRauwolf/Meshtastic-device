@@ -12,12 +12,19 @@ SX1262Interface::SX1262Interface(RADIOLIB_PIN_TYPE cs, RADIOLIB_PIN_TYPE irq, RA
 /// \return true if initialisation succeeded.
 bool SX1262Interface::init()
 {
+#ifdef SX1262_POWER_EN
+    digitalWrite(SX1262_POWER_EN, HIGH);
+    pinMode(SX1262_POWER_EN, OUTPUT);
+#endif
+
     RadioLibInterface::init();
 
-#ifdef SX1262_RXEN // set not rx or tx mode
+#ifdef SX1262_RXEN                  // set not rx or tx mode
+    digitalWrite(SX1262_RXEN, LOW); // Set low before becoming an output
     pinMode(SX1262_RXEN, OUTPUT);
 #endif
 #ifdef SX1262_TXEN
+    digitalWrite(SX1262_TXEN, LOW);
     pinMode(SX1262_TXEN, OUTPUT);
 #endif
 
@@ -30,8 +37,15 @@ bool SX1262Interface::init()
     bool useRegulatorLDO = false; // Seems to depend on the connection to pin 9/DCC_SW - if an inductor DCDC?
 
     applyModemConfig();
+
+    if (power == 0)
+        power = 22;
+
     if (power > 22) // This chip has lower power limits than some
         power = 22;
+
+    limitPower();
+
     int res = lora.begin(freq, bw, sf, cr, syncWord, power, currentLimit, preambleLength, tcxoVoltage, useRegulatorLDO);
     DEBUG_MSG("SX1262 init result %d\n", res);
 
@@ -66,6 +80,10 @@ bool SX1262Interface::reconfigure()
 
     err = lora.setCodingRate(cr);
     assert(err == ERR_NONE);
+
+    // Hmm - seems to lower SNR when the signal levels are high.  Leaving off for now...
+    // err = lora.setRxGain(true);
+    // assert(err == ERR_NONE);
 
     err = lora.setSyncWord(syncWord);
     assert(err == ERR_NONE);
@@ -116,6 +134,7 @@ void SX1262Interface::setStandby()
  */
 void SX1262Interface::addReceiveMetadata(MeshPacket *mp)
 {
+    // DEBUG_MSG("PacketStatus %x\n", lora.getPacketStatus());
     mp->rx_snr = lora.getSNR();
 }
 

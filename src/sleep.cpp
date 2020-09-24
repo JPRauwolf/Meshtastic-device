@@ -7,7 +7,6 @@
 #include "error.h"
 #include "main.h"
 #include "target_specific.h"
-#include "timing.h"
 
 #ifndef NO_ESP32
 #include "esp32/pm.h"
@@ -123,11 +122,11 @@ bool doPreflightSleep()
 /// Tell devices we are going to sleep and wait for them to handle things
 static void waitEnterSleep()
 {
-    uint32_t now = timing::millis();
+    uint32_t now = millis();
     while (!doPreflightSleep()) {
         delay(100); // Kinda yucky - wait until radio says say we can shutdown (finished in process sends/receives)
 
-        if (timing::millis() - now > 30 * 1000) { // If we wait too long just report an error and go to sleep
+        if (millis() - now > 30 * 1000) { // If we wait too long just report an error and go to sleep
             recordCriticalError(ErrSleepEnterWait);
             assert(0); // FIXME - for now we just restart, need to fix bug #167
             break;
@@ -197,7 +196,7 @@ void doDeepSleep(uint64_t msecToWake)
     static const uint8_t rtcGpios[] = {/* 0, */ 2,
     /* 4, */
 #ifndef USE_JTAG
-                                       12,           13,
+                                       13,
     /* 14, */ /* 15, */
 #endif
                                        /* 25, */ 26, /* 27, */
@@ -284,8 +283,10 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     assert(esp_light_sleep_start() == ESP_OK);
 
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+#ifdef BUTTON_PIN
     if (cause == ESP_SLEEP_WAKEUP_GPIO)
         DEBUG_MSG("Exit light sleep gpio: btn=%d\n", !digitalRead(BUTTON_PIN));
+#endif
 
     return cause;
 }
